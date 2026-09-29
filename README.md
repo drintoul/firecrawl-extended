@@ -5,21 +5,38 @@ REST gateway, a web console, an MCP interface, a custom Playwright interaction
 service, and Ollama-backed LLM extraction.
 
 ```
-                        ┌────────────────────────────────────────────┐
-  Browser / curl ──► :18080  gateway   (single REST interface + UI)  │
-                        │      │                                     │
-                        │      ├─ /v0,/v1,/v2 ──► api (firecrawl)    │
-                        │      ├─ /v1/interact ─► interact           │
-                        │      └─ /v1/extract (shim → /v2/scrape)    │
-                        └──────────────▲─────────────────────────────┘
-  MCP clients ───────► :18081/mcp     │
-   (Streamable HTTP)          mcp ────┘
+ external:
+   browser / curl ─▶ :18080  gateway   single REST interface + web console
+   mcp clients    ─▶ :18081  mcp       Streamable HTTP; calls gateway internally
 
-  internal-only:  api ──► playwright-service (JS rendering)
-                  api ──► redis · rabbitmq · nuq-postgres (queues)
-  external net:   api, interact ──► llm-network ──► ollama :11434
-                                                  searxng :8080
+ gateway routes:
+   /v0, /v1, /v2  (any path)   ─▶ api        upstream Firecrawl API + workers
+   /v1/interact                ─▶ interact   Playwright browser sessions
+   /v1/extract                 ─▶ shim: map/search ─▶ /v2/scrape ─▶ ollama
+   /  /api  /status  /healthz  ─▶ gateway itself
+
+ internal:    api ─▶ playwright-service · redis · rabbitmq · nuq-postgres
+ llm-network: api, interact, gateway ─▶ ollama :11434 · searxng :8080
 ```
+
+## Why I built this
+
+The open-source Firecrawl is a solid fetch-based scraper, but self-hosting it
+leaves a few gaps:
+
+- **No real browser you can drive.** Upstream scrapes via a fast HTTP/fetch
+  engine whenever possible, and interactive `actions` are gated behind the
+  commercial Fire Engine — so no clicking, form-filling, or reliable
+  screenshots. `POST /v1/interact` fills that gap with full Playwright:
+  locators, waits, assertions, tracing, all three engines.
+- **The extract job API was deprecated upstream.** The gateway re-implements
+  `/v1/extract` synchronously on top of `/v2/scrape`, with a local Ollama
+  model doing the structured extraction — no external LLM calls.
+- **No single front door or UI.** Upstream exposes the API on its own port
+  and ships no console. Here everything — upstream endpoints, interact,
+  extract — sits behind one gateway on `:18080`, with a built-in web console
+  for driving it, and an MCP interface on `:18081` so agents get the same
+  surface as tools.
 
 ## Services
 
@@ -99,8 +116,8 @@ CORS or extra ports. Features:
   screenshot as a real image on the clipboard).
 - **Job polling**: POSTs returning a job `id` get a "Poll job" button plus an
   auto-poll-until-done toggle.
-- **History strip** along the bottom: 5 most recent requests as clickable
-  chips (20 kept in `localStorage`).
+- **History panel** below Request: the 5 most recent requests as a clickable
+  list (20 kept in `localStorage`).
 - API key field (bearer, persisted in `localStorage`).
 
 The machine-readable endpoint listing lives at `GET /api`.
