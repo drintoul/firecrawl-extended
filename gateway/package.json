@@ -1,0 +1,14 @@
+{
+  "name": "firecrawl-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Unified REST gateway for the self-hosted Firecrawl stack",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

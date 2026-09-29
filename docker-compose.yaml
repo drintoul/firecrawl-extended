@@ -1,0 +1,244 @@
+name: firecrawl-extended
+
+# Firecrawl (open-source, self-hosted) + extended interact/extract stack.
+#
+#   - gateway             the single external REST interface (:18080)
+#   - mcp                 MCP server, Streamable HTTP (:18081)
+#   - interact            custom Playwright session/interact service
+#   - api                 upstream Firecrawl API + workers (NuQ/PG queue)
+#   - playwright-service  upstream JS-rendering microservice used by the API
+#   - redis / rabbitmq / nuq-postgres   queue + rate-limit infra
+#
+# External dependencies (already running on this host, attached via the
+# pre-existing `llm-network` docker network):
+#   - `ollama`  container  -> powers /v1/extract + interact prompt planning
+#   - `searxng` container  -> powers /v1/search
+#
+# On a fresh host, create them with:
+#   docker network create llm-network
+#   docker run -d --name ollama  --network llm-network -p 11434:11434 \
+#     -v ollama-data:/root/.ollama ollama/ollama
+#   docker exec ollama ollama pull llama3.1:8b
+#   docker exec ollama ollama pull nomic-embed-text
+#   docker run -d --name searxng --network llm-network -p 8088:8080 \
+#     -v ./searxng:/etc/searxng searxng/searxng   # see searxng/settings.yml
+# Or point OLLAMA_BASE_URL / SEARXNG_ENDPOINT at any reachable instance
+# (e.g. http://host.docker.internal:11434).
+
+x-firecrawl-service: &firecrawl-service
+  networks:
+    - backend
+  restart: unless-stopped
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+      compress: "true"
+
+x-firecrawl-env: &firecrawl-env
+  REDIS_URL: redis://redis:6379
+  REDIS_RATE_LIMIT_URL: redis://redis:6379
+  PLAYWRIGHT_MICROSERVICE_URL: http://playwright-service:3000/scrape
+  POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+  POSTGRES_DB: ${POSTGRES_DB:-postgres}
+  POSTGRES_HOST: nuq-postgres
+  POSTGRES_PORT: "5432"
+  USE_DB_AUTHENTICATION: "false"
+  NUM_WORKERS_PER_QUEUE: ${NUM_WORKERS_PER_QUEUE:-8}
+  CRAWL_CONCURRENT_REQUESTS: ${CRAWL_CONCURRENT_REQUESTS:-10}
+  MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-5}
+  BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-5}
+  # LLM wiring -> Ollama (OpenAI-compatible endpoint)
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://ollama:11434/v1}
+  OPENAI_API_KEY: ollama
+  MODEL_NAME: ${OLLAMA_MODEL:-llama3.1:8b}
+  MODEL_EMBEDDING_NAME: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+  # Search wiring -> SearXNG (JSON output must be enabled)
+  SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT:-http://searxng:8080}
+  SEARXNG_ENGINES: ${SEARXNG_ENGINES:-}
+  SEARXNG_CATEGORIES: ${SEARXNG_CATEGORIES:-}
+  LOGGING_LEVEL: ${LOGGING_LEVEL:-INFO}
+  ENV: local
+
+services:
+  # -------------------------------------------------------------------------
+  # External interface 1: unified REST gateway (only published REST port)
+  # -------------------------------------------------------------------------
+  gateway:
+    <<: *firecrawl-service
+    container_name: firecrawl-extended-gateway
+    build: ./gateway
+    networks:
+      - backend
+      - llm-network   # so GET /status can probe ollama + searxng
+    environment:
+      PORT: "8080"
+      FIRECRAWL_API_URL: http://api:3002
+      INTERACT_SERVICE_URL: http://interact:3001
+      # Internal probes powering the console status pills (GET /status)
+      PLAYWRIGHT_SERVICE_URL: http://playwright-service:3000
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT:-http://searxng:8080}
+      # If set, all gateway calls require `Authorization: Bearer <key>`
+      GATEWAY_API_KEY: ${GATEWAY_API_KEY:-}
+    ports:
+      - "${GATEWAY_PORT:-18080}:8080"
+    depends_on:
+      api:
+        condition: service_started
+      interact:
+        condition: service_started
+
+  # -------------------------------------------------------------------------
+  # External interface 2: MCP server (Streamable HTTP transport)
+  # -------------------------------------------------------------------------
+  mcp:
+    <<: *firecrawl-service
+    container_name: firecrawl-extended-mcp
+    build: ./mcp
+    environment:
+      PORT: "8081"
+      GATEWAY_URL: http://gateway:8080
+      GATEWAY_API_KEY: ${GATEWAY_API_KEY:-}
+    ports:
+      - "${MCP_PORT:-18081}:8081"
+    depends_on:
+      gateway:
+        condition: service_started
+
+  # -------------------------------------------------------------------------
+  # Interact service: stateful Playwright sessions + Ollama action planner
+  # -------------------------------------------------------------------------
+  interact:
+    <<: *firecrawl-service
+    container_name: firecrawl-extended-interact
+    build: ./interact
+    networks:
+      - backend
+      - llm-network
+    environment:
+      PORT: "3001"
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      SESSION_TTL_MS: ${INTERACT_SESSION_TTL_MS:-600000}
+      MAX_SESSIONS: ${INTERACT_MAX_SESSIONS:-10}
+      # Comma-separated browser launch args retried when a goto fails.
+      INTERACT_FALLBACK_LAUNCH_ARGS: ${INTERACT_FALLBACK_LAUNCH_ARGS:-}
+      ARTIFACT_DIR: /artifacts
+    volumes:
+      # Session artifacts (traces, HARs, videos, downloads) on the host.
+      - ./data/artifacts:/artifacts
+    # Headless Chromium needs a bit of shared memory
+    shm_size: "1gb"
+
+  # -------------------------------------------------------------------------
+  # Upstream Firecrawl API + embedded workers (harness)
+  # -------------------------------------------------------------------------
+  api:
+    <<: *firecrawl-service
+    container_name: firecrawl-extended-api
+    image: ghcr.io/firecrawl/firecrawl:latest
+    networks:
+      - backend
+      - llm-network
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    environment:
+      <<: *firecrawl-env
+      HOST: "0.0.0.0"
+      PORT: "3002"
+      EXTRACT_WORKER_PORT: "3004"
+      WORKER_PORT: "3005"
+      NUQ_RABBITMQ_URL: amqp://rabbitmq:5672
+      HARNESS_STARTUP_TIMEOUT_MS: ${HARNESS_STARTUP_TIMEOUT_MS:-120000}
+    command: node dist/src/harness.js --start-docker
+    # Intentionally NOT published: reachable only through the gateway.
+    expose:
+      - "3002"
+    depends_on:
+      redis:
+        condition: service_started
+      playwright-service:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      nuq-postgres:
+        condition: service_healthy
+    cpus: 4.0
+    mem_limit: 8G
+    memswap_limit: 8G
+
+  playwright-service:
+    <<: *firecrawl-service
+    container_name: firecrawl-extended-playwright-service
+    image: ghcr.io/firecrawl/playwright-service:latest
+    environment:
+      PORT: "3000"
+      BLOCK_MEDIA: ${BLOCK_MEDIA:-}
+      MAX_CONCURRENT_PAGES: ${CRAWL_CONCURRENT_REQUESTS:-10}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cpus: 2.0
+    mem_limit: 4G
+    memswap_limit: 4G
+    tmpfs:
+      - /tmp/.cache:noexec,nosuid,size=1g
+
+  redis:
+    <<: *firecrawl-service
+    container_name: firecrawl-extended-redis
+    image: redis:alpine
+    command: redis-server --bind 0.0.0.0 --appendonly yes
+    volumes:
+      - ./data/redis:/data
+
+  rabbitmq:
+    <<: *firecrawl-service
+    container_name: firecrawl-extended-rabbitmq
+    image: rabbitmq:3-management
+    command: rabbitmq-server
+    volumes:
+      - ./data/rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  nuq-postgres:
+    <<: *firecrawl-service
+    container_name: firecrawl-extended-nuq-postgres
+    image: ghcr.io/firecrawl/nuq-postgres:latest
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+networks:
+  backend:
+    driver: bridge
+  # Pre-existing network hosting the `ollama` and `searxng` containers.
+  llm-network:
+    external: true
