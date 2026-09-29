@@ -97,7 +97,11 @@ curl -s -X POST http://localhost:18080/v1/scrape \
 
 `http://localhost:18080/` serves a self-contained console UI (single page, no
 build step, no external assets) that talks to the gateway same-origin — no
-CORS or extra ports. Features:
+CORS or extra ports.
+
+![Firecrawl Extended Console](docs/console.png)
+
+Features:
 
 - **Live service status pills** in the header — firecrawl, ollama, searxng,
   playwright — probed via `GET /status` every 15 s (green ok / orange
