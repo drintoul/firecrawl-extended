@@ -137,15 +137,18 @@ the [Firecrawl API reference](https://docs.firecrawl.dev/api-reference/introduct
 | `GET /api` | JSON listing of all endpoints |
 | `GET /status` | Per-service health (firecrawl/ollama/searxng/playwright) — powers the console pills |
 | `POST /v1/scrape` | Scrape a URL → markdown/html/links/screenshot/json |
-| `POST /v1/batch/scrape` | Async batch scrape → job id |
-| `GET/DELETE /v1/batch/scrape/:id` | Batch status / cancel (+ `/errors`) |
-| `POST /v1/crawl` | Async crawl → job id |
-| `GET/DELETE /v1/crawl/:id` | Crawl status / cancel (+ `/errors`, `GET /v1/crawl/active`) |
-| `POST /v1/map` | Discover all URLs on a site |
-| `POST /v1/search` | Web search via SearXNG (+ optional scraping) |
-| `POST /v1/extract` | **Shimmed.** LLM extraction via Ollama — expands `*` URLs via `/v1/map`, falls back to `/v1/search` when only `prompt` is given, synchronous result |
-| `POST /v2/scrape` | Upstream structured extraction: `formats: [{type:"json", prompt, schema}]` |
+| `POST /v2/scrape` | v2 scrape — same + structured `json` formats: `[{type:"json", prompt, schema}]` |
+| `POST /v2/batch/scrape` | Async batch scrape → job id |
+| `GET/DELETE /v2/batch/scrape/:id` | Batch status / cancel (+ `/errors`) |
+| `POST /v2/crawl` | Async crawl → job id |
+| `GET/DELETE /v2/crawl/:id` | Crawl status / cancel (+ `/errors`, `GET /v2/crawl/active`) |
+| `POST /v2/map` | Discover all URLs on a site |
+| `POST /v2/search` | Web search via SearXNG — results under `data.web`; `scrapeOptions` scrapes each hit |
+| `POST /v1/extract` | **Shimmed.** LLM extraction via Ollama — expands `*` URLs via `/v2/map`, falls back to `/v2/search` when only `prompt` is given, synchronous result |
+| `POST /v1/research` | **Custom.** Composed answer endpoint — `/v2/search` with per-result markdown scrape, then Ollama synthesizes `{answer, sources, documents}` |
 | `POST /v1/interact` | **Custom.** Playwright-driven interaction (below) |
+| `POST /v1/interact/async` | Same body, returns a job `id` immediately |
+| `GET /v1/interact/jobs/:id` | Poll an async interact job — live `events`, `actionsLog`, `transcript`, `answer`, `data` |
 | `GET/POST /v1/interact/sessions` | List / create interact sessions |
 | `DELETE /v1/interact/sessions/:id` | Close a session |
 | `GET /v1/interact/sessions/:id/artifacts/:name` | Fetch trace.zip / session.har / video artifacts |
@@ -156,7 +159,7 @@ Any other `/v0`, `/v1`, or `/v2` path is forwarded to the upstream API as-is.
 
 Playwright-backed interactive browser sessions implementing the API surface
 from <https://playwright.dev/>. Bodies accept either an `actions` list or a
-`prompt` planned by Ollama.
+`prompt` driven by Ollama's agent loop.
 
 ```json
 {
@@ -230,12 +233,43 @@ it report `usedFallbackArgs` in `GET /v1/interact/sessions`.
 `screenshot@fullPage`, `pdf`, `ariaSnapshot`, `console`, `errors`,
 `network`, `cookies`, `storageState`, `tabs`.
 
-Responses include `actionsLog` (per-action status/results), `data`, and a
-`sessionId` when `keepSession` is set. Sessions expire after
+**Prompt mode (agent loop).** Send `prompt` instead of `actions` and the
+service iterates: snapshot the page (visible text + interactive elements with
+hrefs) → ask Ollama for the next actions or a final answer → execute → repeat,
+up to `maxSteps` (default 5, max 12). The model replies `{"actions":[...]}`
+to keep working or `{"done":true,"answer":"..."}` to finish. `model` overrides
+`OLLAMA_MODEL` per request — see "Model choice" below. Prompt-mode defaults:
+`timeout` 300s (vs 120s for explicit actions), `stopOnFailure` off within
+steps, and per-action waits capped at 10s.
+
+**Vision grounding.** When `INTERACT_VISION_MODEL` is set (or per request via
+`vision: true` / `vision: "<model>"`), each agent step also sends a page
+screenshot to that VLM and appends its description to the snapshot — catches
+cookie walls, modals and visual content that DOM text misses.
+
+**Other request flags:** `adblock: true` aborts tracker/ad network requests
+(default via `INTERACT_ADBLOCK`); `maxSteps`, `model`, `vision`, `timeout`
+as above.
+
+**Async mode.** `POST /v1/interact/async` accepts the same body and returns
+`{id, statusUrl}` immediately. `GET /v1/interact/jobs/:id` returns live
+`events`/`actionsLog`/`transcript` while running, then `answer`/`data`/
+`error` on `completed`/`failed` — finished jobs are retained for
+`INTERACT_JOB_TTL_MS` (default 10 min). The console streams job events into
+its Logs pane while polling.
+
+Responses include `actionsLog` (per-action status/results), `data`, `events`
+(chronological browser timeline: navigations, console messages, page errors,
+failed requests, HTTP≥400 responses, dialogs, downloads — also streamed to the
+console's Logs pane), and a `sessionId` when `keepSession` is set. Prompt-mode
+responses additionally include `answer` (the model's final answer when it
+declares `done`), `plannedActions` (the full executed plan), and `transcript`
+(step-by-step progress notes fed back to the model). Sessions expire after
 `INTERACT_SESSION_TTL_MS` idle (default 10 min) and are capped by
 `INTERACT_MAX_SESSIONS` (default 10). Artifacts persist under
-`./data/artifacts/` and are retrievable via
-`GET /v1/interact/sessions/:id/artifacts/:name` or the `artifact` action.
+`./data/artifacts/` — including an `events.jsonl` timeline written at session
+close — and are retrievable via `GET /v1/interact/sessions/:id/artifacts/:name`
+(including `events` on live sessions) or the `artifact` action.
 
 ## MCP interface
 
@@ -252,8 +286,10 @@ Streamable HTTP at `http://localhost:18081/mcp`. Example client config:
 Tools: `firecrawl_scrape`, `firecrawl_batch_scrape`,
 `firecrawl_batch_scrape_status`, `firecrawl_crawl`, `firecrawl_crawl_status`,
 `firecrawl_crawl_cancel`, `firecrawl_map`, `firecrawl_search`,
-`firecrawl_extract`, `firecrawl_extract_status`, `firecrawl_interact`,
-`firecrawl_interact_sessions`, `firecrawl_interact_close_session`.
+`firecrawl_extract`, `firecrawl_extract_status`, `firecrawl_research`,
+`firecrawl_interact`, `firecrawl_interact_async`,
+`firecrawl_interact_job_status`, `firecrawl_interact_sessions`,
+`firecrawl_interact_close_session`.
 
 ## Configuration
 
@@ -267,10 +303,51 @@ keep them in sync. Notables:
   automatically.
 - `OLLAMA_BASE_URL` / `OLLAMA_MODEL` / `OLLAMA_EMBEDDING_MODEL` —
   extraction/planning backend (default `llama3.1:8b`, already pulled in the
-  shared Ollama). Larger models extract better.
+  shared Ollama). Larger models extract and plan better — interact `prompt`
+  mode also accepts a per-request `model` override.
+- `OLLAMA_KEEP_ALIVE` — how long Ollama keeps the model resident between
+  calls (default `30m`; `-1` = never unload). Large models (27b+) can take
+  >1min to cold-load on CPU, which shows up as a timeout on the first call
+  after idle. `OLLAMA_TIMEOUT_MS` tunes the per-call Ollama timeout
+  (default `180000`).
+
+### Model choice
+
+`OLLAMA_MODEL` backs three things: `/v1/extract` extraction, `/v2/scrape`
+`json` formats (upstream `MODEL_NAME`), and `/v1/interact` prompt-mode
+planning. The interact prompt loop is the most demanding consumer — the model
+must read a page snapshot, decide whether it already has the answer, and emit
+strict JSON. What actually matters, measured on this stack:
+
+| Model class | Examples | Behavior in prompt mode |
+|---|---|---|
+| Reasoning/"thinking" | `qwen3:8b`, `qwen3:14b`, `qwen3.6:27b` | Best. Reads the snapshot, answers `done` when it should, routes to the right pages. Slower per call (thinking preamble) but wastes far fewer steps. |
+| Large instruct | `qwen2.5:32b-instruct`, `qwen2.5:14b` | Good JSON, weaker judgment — tends to over-explore (visited 4 ship pages individually instead of using the destination filter) and may not converge to `done` within `maxSteps`. |
+| Tool-use fine-tunes | `llama3-groq-tool-use`, `hermes3:8b` | Poor fit. Tuned for OpenAI function schemas, not freeform plans — `groq-tool-use` looped `goto` forever, `hermes3` browsed well but never stopped. |
+| Small instruct | `llama3.1:8b` (baseline) | Works for trivial tasks; emits placeholder selectors and stalls on anything multi-step. |
+
+Practical guidance:
+
+- **`qwen3:14b` is the best default** — fast enough per step, and in testing
+  it answered a "report the top story" task in a single step with zero wasted
+  actions. `qwen3:8b` scored identically and is faster still.
+- **Hard multi-step tasks**: pass `"model": "qwen3.6:27b"` (or similar) in the
+  request body — heavier thinking models route much better, at ~60-90s per
+  step on CPU.
+- **`/v1/extract`** is less sensitive — it's a single constrained JSON
+  generation, so even mid-size instruct models extract well. Model size
+  mostly buys robustness on ambiguous pages.
+- Thinking models emit their reasoning in a separate `thinking` field under
+  `format:"json"`, so the planner output stays clean — but budget extra time
+  per step (`maxSteps × ~30-90s` at 14b on CPU).
 - `SEARXNG_ENDPOINT` / `SEARXNG_ENGINES` / `SEARXNG_CATEGORIES` — search
   backend + tuning.
-- `INTERACT_SESSION_TTL_MS` / `INTERACT_MAX_SESSIONS` — session lifecycle.
+- `INTERACT_SESSION_TTL_MS` / `INTERACT_MAX_SESSIONS` — session lifecycle;
+  `INTERACT_JOB_TTL_MS` — retention for finished async jobs.
+- `INTERACT_VISION_MODEL` — VLM describing screenshots during prompt-mode
+  steps (empty disables; request field `vision` overrides).
+- `INTERACT_ADBLOCK` — set `1` to abort tracker/ad requests in all sessions
+  (per-request `adblock` flag overrides).
 - `INTERACT_FALLBACK_LAUNCH_ARGS` — comma-separated browser launch args
   retried once when a page fails to load (default
   `--disable-http2,--disable-blink-features=AutomationControlled`, which

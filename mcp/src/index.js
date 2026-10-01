@@ -79,7 +79,7 @@ function buildServer() {
       },
     },
     async ({ urls, formats: fmts, options }) =>
-      ok(await api("POST", "/v1/batch/scrape", { urls, formats: fmts, ...(options || {}) }))
+      ok(await api("POST", "/v2/batch/scrape", { urls, formats: fmts, ...(options || {}) }))
   );
 
   server.registerTool(
@@ -89,7 +89,7 @@ function buildServer() {
       description: "Get the status/results of a batch scrape job.",
       inputSchema: { id: z.string().describe("Batch scrape job id") },
     },
-    async ({ id }) => ok(await api("GET", `/v1/batch/scrape/${id}`))
+    async ({ id }) => ok(await api("GET", `/v2/batch/scrape/${id}`))
   );
 
   server.registerTool(
@@ -109,7 +109,7 @@ function buildServer() {
       },
     },
     async ({ url, ...opts }) =>
-      ok(await api("POST", "/v1/crawl", { url, ...stripUndefined(opts) }))
+      ok(await api("POST", "/v2/crawl", { url, ...stripUndefined(opts) }))
   );
 
   server.registerTool(
@@ -119,7 +119,7 @@ function buildServer() {
       description: "Get the status/results of a crawl job.",
       inputSchema: { id: z.string().describe("Crawl job id") },
     },
-    async ({ id }) => ok(await api("GET", `/v1/crawl/${id}`))
+    async ({ id }) => ok(await api("GET", `/v2/crawl/${id}`))
   );
 
   server.registerTool(
@@ -129,7 +129,7 @@ function buildServer() {
       description: "Cancel a running crawl job.",
       inputSchema: { id: z.string().describe("Crawl job id") },
     },
-    async ({ id }) => ok(await api("DELETE", `/v1/crawl/${id}`))
+    async ({ id }) => ok(await api("DELETE", `/v2/crawl/${id}`))
   );
 
   server.registerTool(
@@ -146,7 +146,7 @@ function buildServer() {
       },
     },
     async ({ url, ...opts }) =>
-      ok(await api("POST", "/v1/map", { url, ...stripUndefined(opts) }))
+      ok(await api("POST", "/v2/map", { url, ...stripUndefined(opts) }))
   );
 
   server.registerTool(
@@ -162,7 +162,7 @@ function buildServer() {
         scrapeOptions: z.record(z.any()).optional().describe("e.g. {formats:[\"markdown\"]} to scrape each result"),
       },
     },
-    async (args) => ok(await api("POST", "/v1/search", stripUndefined(args)))
+    async (args) => ok(await api("POST", "/v2/search", stripUndefined(args)))
   );
 
   server.registerTool(
@@ -206,7 +206,11 @@ function buildServer() {
           .array(z.record(z.any()))
           .optional()
           .describe('Action list, e.g. [{"type":"click","target":{"getBy":"role","role":"button","name":"Save"}},{"type":"waitForURL","url":"*/done*"},{"type":"scrape"}]'),
-        prompt: z.string().optional().describe("Natural-language interaction goal (alternative to actions)"),
+        prompt: z.string().optional().describe("Natural-language goal (alternative to actions) — drives an Ollama agent loop that plans, acts, and answers"),
+        model: z.string().optional().describe("Ollama model override for prompt mode (default OLLAMA_MODEL)"),
+        maxSteps: z.number().optional().describe("Max agent iterations for prompt mode (default 5, max 12)"),
+        vision: z.union([z.boolean(), z.string()]).optional().describe("Prompt-mode vision grounding: true uses INTERACT_VISION_MODEL, or pass a vision model name (e.g. qwen2.5vl)"),
+        adblock: z.boolean().optional().describe("Abort tracker/ad network requests"),
         browser: z.enum(["chromium", "firefox", "webkit"]).optional(),
         device: z.string().optional().describe('Playwright device descriptor, e.g. "iPhone 13"'),
         viewport: z.record(z.any()).optional(),
@@ -218,6 +222,56 @@ function buildServer() {
       },
     },
     async (args) => ok(await api("POST", "/v1/interact", stripUndefined(args)))
+  );
+
+  server.registerTool(
+    "firecrawl_interact_async",
+    {
+      title: "Interact Async (Job)",
+      description:
+        "Same as firecrawl_interact but returns a job id immediately. Poll with firecrawl_interact_job_status for live browser events, action log, transcript and final answer.",
+      inputSchema: {
+        url: z.string().url().optional(),
+        sessionId: z.string().optional(),
+        keepSession: z.boolean().optional(),
+        actions: z.array(z.record(z.any())).optional(),
+        prompt: z.string().optional(),
+        model: z.string().optional(),
+        maxSteps: z.number().optional(),
+        vision: z.union([z.boolean(), z.string()]).optional(),
+        adblock: z.boolean().optional(),
+        browser: z.enum(["chromium", "firefox", "webkit"]).optional(),
+        formats,
+        timeout: z.number().optional(),
+      },
+    },
+    async (args) => ok(await api("POST", "/v1/interact/async", stripUndefined(args)))
+  );
+
+  server.registerTool(
+    "firecrawl_interact_job_status",
+    {
+      title: "Interact Job Status",
+      description: "Poll an async interact job — live browser events, action log, transcript, answer and data.",
+      inputSchema: { id: z.string().describe("Interact job id from firecrawl_interact_async") },
+    },
+    async ({ id }) => ok(await api("GET", `/v1/interact/jobs/${id}`))
+  );
+
+  server.registerTool(
+    "firecrawl_research",
+    {
+      title: "Research Question",
+      description:
+        "Answer a research question: searches via SearXNG, scrapes the top results, then synthesizes a cited answer with the local Ollama model. Returns {answer, sources, documents}.",
+      inputSchema: {
+        query: z.string().describe("Research question or search query"),
+        limit: z.number().optional().describe("Number of sources (default 5)"),
+        prompt: z.string().optional().describe("Override instruction to the synthesizer (defaults to the query)"),
+        model: z.string().optional().describe("Ollama model override"),
+      },
+    },
+    async (args) => ok(await api("POST", "/v1/research", stripUndefined(args)))
   );
 
   server.registerTool(

@@ -64,6 +64,13 @@
   #tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 8px 10px; color: var(--muted); font-size: 12.5px; }
   #tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
   #responseBody { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  .panel .body.split { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+  .resp-pane { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px; }
+  #logsPane { flex: 1; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+  .logs-hdr { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 6px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .logs-hdr .icon-btn { padding: 0; }
+  #logs { flex: 1; overflow: auto; padding: 8px 12px; font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+  #logs .t { color: var(--muted); }
   #renderedMd { font-family: inherit; }
   #renderedMd h1, #renderedMd h2, #renderedMd h3 { border-bottom: 1px solid var(--border); padding-bottom: 4px; }
   #renderedMd code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-family: var(--mono); font-size: 12px; }
@@ -133,10 +140,16 @@
       <button data-tab="rendered">Rendered</button>
       <button data-tab="media">Media</button>
     </div>
-    <div class="body">
-      <div id="responseBody"></div>
-      <div id="renderedMd" style="display:none"></div>
-      <div id="mediaPanel" style="display:none"></div>
+    <div class="body split">
+      <div class="resp-pane">
+        <div id="responseBody"></div>
+        <div id="renderedMd" style="display:none"></div>
+        <div id="mediaPanel" style="display:none"></div>
+      </div>
+      <div id="logsPane">
+        <div class="logs-hdr">Logs<button id="copyLogs" class="icon-btn" title="Copy logs"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+        <div id="logs"><div class="empty">No activity yet</div></div>
+      </div>
     </div>
   </div>
 </main>
@@ -153,18 +166,20 @@ const PRESETS = [
     body: { url: "https://example.com", formats: [{ type: "json", prompt: "Extract the main topic", schema: { type: "object", properties: { topic: { type: "string" } } } }] } },
   { name: "Extract (Ollama)", m: "POST", path: "/v1/extract",
     body: { urls: ["https://example.com"], prompt: "Extract the main topic", schema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] } } },
-  { name: "Map", m: "POST", path: "/v1/map",
+  { name: "Map", m: "POST", path: "/v2/map",
     body: { url: "https://example.com", limit: 50 } },
-  { name: "Search", m: "POST", path: "/v1/search",
+  { name: "Search", m: "POST", path: "/v2/search",
     body: { query: "firecrawl web scraping", limit: 5, scrapeOptions: { formats: ["markdown"] } } },
-  { name: "Batch scrape", m: "POST", path: "/v1/batch/scrape",
+  { name: "Research", m: "POST", path: "/v1/research",
+    body: { query: "which cruise ships does Norwegian Cruise Line operate on Hawaii itineraries", limit: 5 } },
+  { name: "Batch scrape", m: "POST", path: "/v2/batch/scrape",
     body: { urls: ["https://example.com"], formats: ["markdown"] } },
-  { name: "Batch status", m: "GET", path: "/v1/batch/scrape/:id", body: null },
-  { name: "Crawl", m: "POST", path: "/v1/crawl",
+  { name: "Batch status", m: "GET", path: "/v2/batch/scrape/:id", body: null },
+  { name: "Crawl", m: "POST", path: "/v2/crawl",
     body: { url: "https://example.com", limit: 10, scrapeOptions: { formats: ["markdown"] } } },
-  { name: "Crawl status", m: "GET", path: "/v1/crawl/:id", body: null },
-  { name: "Active crawls", m: "GET", path: "/v1/crawl/active", body: null },
-  { name: "Cancel crawl", m: "DELETE", path: "/v1/crawl/:id", body: null },
+  { name: "Crawl status", m: "GET", path: "/v2/crawl/:id", body: null },
+  { name: "Active crawls", m: "GET", path: "/v2/crawl/active", body: null },
+  { name: "Cancel crawl", m: "DELETE", path: "/v2/crawl/:id", body: null },
   { name: "Interact (actions)", m: "POST", path: "/v1/interact",
     body: { url: "https://example.com", actions: [
       { type: "assert", target: { getBy: "role", role: "link", name: "Learn more" }, assertions: [{ type: "toBeVisible" }] },
@@ -172,6 +187,9 @@ const PRESETS = [
       { type: "scrape" }], formats: ["markdown", "ariaSnapshot", "screenshot"] } },
   { name: "Interact (prompt)", m: "POST", path: "/v1/interact",
     body: { url: "https://example.com", prompt: "click the Learn more link", formats: ["markdown"] } },
+  { name: "Interact (async)", m: "POST", path: "/v1/interact/async",
+    body: { url: "https://example.com", prompt: "click the Learn more link", maxSteps: 5, vision: true, adblock: true, formats: ["markdown"] } },
+  { name: "Interact job", m: "GET", path: "/v1/interact/jobs/:id", body: null },
   { name: "Interact sessions", m: "GET", path: "/v1/interact/sessions", body: null },
 ];
 
@@ -190,7 +208,7 @@ for (const p of PRESETS) {
 }
 
 // ------------------------------------------------------------- path params ---
-// Paths may contain :param placeholders (e.g. /v1/crawl/:id). Values are
+// Paths may contain :param placeholders (e.g. /v2/crawl/:id). Values are
 // remembered per-route in localStorage; job ids returned by POSTs are stored
 // automatically so status/cancel presets pre-fill themselves.
 const PARAM_KEY = "fcx_params";
@@ -265,7 +283,31 @@ $("#copyCurl").onclick = async () => {
   flashCopied($("#copyCurl"));
 };
 
+// ------------------------------------------------------------------- logs ---
+function log(msg, at) {
+  const el = $("#logs");
+  if (el.querySelector(".empty")) el.innerHTML = "";
+  const d = document.createElement("div");
+  const t = document.createElement("span");
+  t.className = "t";
+  t.textContent = `[${new Date(at ?? Date.now()).toLocaleTimeString("en-GB")}] `;
+  d.appendChild(t);
+  d.appendChild(document.createTextNode(msg));
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+}
+function clearLogs() { $("#logs").innerHTML = ""; }
+$("#copyLogs").onclick = async () => {
+  const text = $("#logs").innerText;
+  if (!text.trim() || $("#logs").querySelector(".empty")) return;
+  await copyText(text);
+  flashCopied($("#copyLogs"));
+};
+
 let pollTimer = null;
+// How many job events/action entries have already been shown in Logs —
+// keeps polling updates delta-only.
+let pollSeen = { events: 0, actions: 0 };
 $("#send").onclick = () => sendRequest();
 
 async function sendRequest() {
@@ -286,6 +328,8 @@ async function sendRequest() {
   $("#renderedMd").innerHTML = "";
   $("#mediaPanel").innerHTML = "";
   flashStatus("sending…", "pending");
+  clearLogs();
+  log(`→ ${method} ${path}`);
   const t0 = performance.now();
   try {
     const res = await fetch(path, { method, headers: headers(), body });
@@ -293,12 +337,31 @@ async function sendRequest() {
     const ms = Math.round(performance.now() - t0);
     let json = null;
     try { json = JSON.parse(text); } catch { /* raw */ }
+    log(`← HTTP ${res.status} · ${ms} ms`);
     lastResponse = { status: res.status, json, text };
     showResponse(res.status, ms, json, text);
     addHistory(method, path, res.status);
-    if (json?.id) rememberJob($("#path").value.trim().replace(/:.*$/, ""), json.id);
+    if (json?.warning) log(`warning: ${json.warning}`);
+    for (const a of json?.plannedActions ?? []) {
+      const tgt = a.target ? ` → ${JSON.stringify(a.target).slice(0, 100)}` : "";
+      log(`plan: ${a.type}${tgt}`);
+    }
+    for (const e of (json?.events ?? []).slice(-80)) {
+      if (!e.text || e.text === "{}") continue;
+      log(`[${e.kind}] ${e.text}`, e.at);
+    }
+    if (json?.answer) log(`answer: ${json.answer}`);
+    for (const a of json?.actionsLog ?? json?.data?.actionsLog ?? []) {
+      const st = a.error ? `failed — ${a.error}` : (a.status ?? "ok");
+      log(`action ${a.type ?? a.action ?? "?"}: ${st}`);
+    }
+    if (json?.id) {
+      const jobKey = /interact\/async$/.test(path) ? path.replace(/\/async$/, "/jobs") : path.replace(/:.*$/, "");
+      rememberJob(jobKey, json.id);
+    }
     maybeAutopoll(method, path, json);
   } catch (e) {
+    log(`error: ${e.message}`);
     flashStatus("network error: " + e.message, "err");
   }
 }
@@ -306,14 +369,17 @@ async function sendRequest() {
 // ------------------------------------------------------------- job polling ---
 function jobStatusPath(method, path, json) {
   if (method !== "POST" || !json?.id) return null;
+  if (/\/v[12]\/interact\/async$/.test(path)) return path.replace(/\/async$/, `/jobs/${json.id}`);
   if (/\/v[12]\/(crawl|batch\/scrape|extract)$/.test(path)) return `${path}/${json.id}`;
   return null;
 }
 
 function maybeAutopoll(method, path, json) {
   clearTimeout(pollTimer);
+  pollSeen = { events: 0, actions: 0 };
   const sp = jobStatusPath(method, path, json);
   if (!sp) return;
+  log(`job ${json.id} → ${sp}`);
   const go = () => poll(sp);
   if ($("#autopoll").checked) pollTimer = setTimeout(go, 1500);
   const btn = document.createElement("button");
@@ -329,7 +395,20 @@ async function poll(sp) {
   lastResponse = { status: res.status, json, text: JSON.stringify(json) };
   showResponse(res.status, null, json, JSON.stringify(json));
   const st = json?.status;
-  if (json && ["scraping", "processing", "crawling", "in_progress", "indexing"].includes(st)) {
+  const prog = json?.total != null ? ` ${json.completed ?? 0}/${json.total}` : "";
+  log(`poll: ${st ?? res.status}${prog}`);
+  // Stream interact-job events/actions into Logs as they arrive.
+  for (const e of (json?.events ?? []).slice(pollSeen.events)) {
+    if (e.text && e.text !== "{}") log(`[${e.kind}] ${e.text}`, e.at);
+  }
+  pollSeen.events = (json?.events ?? []).length;
+  for (const a of (json?.actionsLog ?? []).slice(pollSeen.actions)) {
+    const s = a.error ? `failed — ${a.error.split("\n")[0].slice(0, 150)}` : (a.status ?? "ok");
+    log(`action ${a.type}: ${s}`);
+  }
+  pollSeen.actions = (json?.actionsLog ?? []).length;
+  if (json?.answer && st !== "running") log(`answer: ${json.answer}`);
+  if (json && ["scraping", "processing", "crawling", "in_progress", "indexing", "running", "queued", "pending"].includes(st)) {
     if ($("#autopoll").checked) pollTimer = setTimeout(() => poll(sp), 2000);
   }
 }
@@ -370,12 +449,40 @@ let lastMarkdown = null;
 let lastMedia = [];
 let lastImages = [];
 
+// Collect markdown-bearing docs across response shapes:
+//   v1/v2 scrape          -> data.markdown
+//   v1 search             -> data[]
+//   v2 search             -> data.web[] (+ news/images groups)
+//   crawl/batch status    -> data[]
+function collectDocs(json) {
+  const d = json?.data;
+  if (!d || typeof d !== "object") return [];
+  if (typeof d.markdown === "string")
+    return [{ title: d.metadata?.title, url: d.metadata?.sourceURL, markdown: d.markdown }];
+  const groups = [];
+  if (Array.isArray(d)) groups.push(d);
+  for (const k of ["web", "news", "images"]) if (Array.isArray(d[k])) groups.push(d[k]);
+  const docs = [];
+  for (const g of groups)
+    for (const it of g)
+      if (it && (it.markdown || it.description))
+        docs.push({
+          title: it.metadata?.title || it.title,
+          url: it.metadata?.sourceURL || it.url,
+          markdown: it.markdown || it.description || "",
+        });
+  return docs;
+}
+
 function buildRendered(json) {
   const el = $("#renderedMd");
-  let md = json?.data?.markdown
-    ?? (Array.isArray(json?.data) ? json.data.map((d) => d.markdown || d.description || "").join("\n\n---\n\n") : null)
-    ?? json?.data?.[0]?.markdown
-    ?? null;
+  const docs = collectDocs(json);
+  let md = docs.length
+    ? docs.map((d) =>
+        (d.url ? `### [${d.title || d.url}](${d.url})` : d.title ? `### ${d.title}` : "")
+        + "\n\n" + d.markdown
+      ).join("\n\n---\n\n")
+    : null;
   lastMarkdown = md;
   lastImages = [];
   if (md) {

@@ -54,7 +54,19 @@ export async function runActions(
     const entry = { type: action.type, status: "ok" };
     log.push(entry);
     try {
-      await exec(session, action, entry, formats);
+      try {
+        await exec(session, action, entry, formats);
+      } catch (err) {
+        // Strict-mode violation means the locator matched multiple elements;
+        // for agent/manual plans retry once with the first match.
+        if (!/strict mode violation/i.test(err?.message ?? "") || T(action) == null) throw err;
+        const base = T(action);
+        const t = typeof base === "string"
+          ? { selector: base, first: true }
+          : { ...base, first: true };
+        await exec(session, { ...action, target: t }, entry, formats);
+        entry.note = "retried with first() after strict-mode violation";
+      }
       if (action.type === "scrape" || action.type === "capture") {
         data = await capture(session, formats);
       }
@@ -103,7 +115,7 @@ async function exec(session, action, entry, formats) {
       await page.waitForTimeout(Math.min(action.milliseconds ?? action.timeout ?? 1000, 120000));
       break;
     case "waitForSelector":
-      await resolveLocator(page, T(action)).waitFor({
+      await resolveLocator(page, T(action)).first().waitFor({
         state: action.state || "visible",
         timeout: action.timeout ?? DEFAULT_WAIT_TIMEOUT,
       });
@@ -940,14 +952,30 @@ export function registerPage(session, page) {
   if (session.pages.includes(page)) return;
   session.pages.push(page);
   page.setDefaultTimeout(session.defaultTimeout ?? 15000);
+  const ev = (kind, text) => {
+    session.events.push({ at: Date.now(), kind, text: String(text).slice(0, 500) });
+    if (session.events.length > 500) session.events.shift();
+  };
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) ev("nav", frame.url());
+  });
   page.on("console", (msg) => {
     session.console.push({ type: msg.type(), text: msg.text().slice(0, 2000), at: Date.now() });
     if (session.console.length > 500) session.console.shift();
+    ev(`console.${msg.type()}`, msg.text());
   });
   page.on("pageerror", (err) => {
     session.errors.push({ message: String(err).slice(0, 2000), at: Date.now() });
     if (session.errors.length > 500) session.errors.shift();
+    ev("pageerror", err.message ?? err);
   });
+  page.on("requestfailed", (req) => {
+    ev("reqfail", `${req.method()} ${req.url()} — ${req.failure()?.errorText ?? "failed"}`);
+  });
+  page.on("response", (res) => {
+    if (res.status() >= 400) ev("http", `${res.status()} ${res.url()}`);
+  });
+  page.on("download", (dl) => ev("download", dl.suggestedFilename()));
   page.on("request", (req) => {
     const entry = { method: req.method(), url: req.url(), resourceType: req.resourceType(), at: Date.now() };
     session.network.push(entry);
@@ -962,6 +990,7 @@ export function registerPage(session, page) {
   page.on("dialog", async (d) => {
     const intent = session.dialogIntent;
     session.dialogs.push({ type: d.type(), message: d.message(), handled: intent?.action ?? "dismiss", at: Date.now() });
+    ev("dialog", `${d.type()}: ${d.message()}`);
     session.dialogIntent = null;
     try {
       if (intent?.action === "accept") await d.accept(intent.promptText);

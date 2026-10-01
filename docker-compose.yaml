@@ -17,9 +17,12 @@ name: firecrawl-extended
 # On a fresh host, create them with:
 #   docker network create llm-network
 #   docker run -d --name ollama  --network llm-network -p 11434:11434 \
+#     -e OLLAMA_KEEP_ALIVE=-1 \   # keep models resident (big models are slow to cold-load)
 #     -v ollama-data:/root/.ollama ollama/ollama
 #   docker exec ollama ollama pull llama3.1:8b
 #   docker exec ollama ollama pull nomic-embed-text
+#   # For better interact prompt-mode results, pull a bigger instruct model
+#   # (e.g. qwen2.5:32b-instruct) and set OLLAMA_MODEL in .env.
 #   docker run -d --name searxng --network llm-network -p 8088:8080 \
 #     -v ./searxng:/etc/searxng searxng/searxng   # see searxng/settings.yml
 # Or point OLLAMA_BASE_URL / SEARXNG_ENDPOINT at any reachable instance
@@ -83,6 +86,8 @@ services:
       # Internal probes powering the console status pills (GET /status)
       PLAYWRIGHT_SERVICE_URL: http://playwright-service:3000
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-180000}
       SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT:-http://searxng:8080}
       # If set, all gateway calls require `Authorization: Bearer <key>`
       GATEWAY_API_KEY: ${GATEWAY_API_KEY:-}
@@ -125,8 +130,16 @@ services:
       PORT: "3001"
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-180000}
       SESSION_TTL_MS: ${INTERACT_SESSION_TTL_MS:-600000}
       MAX_SESSIONS: ${INTERACT_MAX_SESSIONS:-10}
+      JOB_TTL_MS: ${INTERACT_JOB_TTL_MS:-600000}
+      # Vision model describing page screenshots during prompt-mode agent
+      # steps (empty disables; per-request "vision" overrides)
+      INTERACT_VISION_MODEL: ${INTERACT_VISION_MODEL:-}
+      # Set to 1 to abort tracker/ad requests in every interact session
+      INTERACT_ADBLOCK: ${INTERACT_ADBLOCK:-}
       # Comma-separated browser launch args retried when a goto fails.
       INTERACT_FALLBACK_LAUNCH_ARGS: ${INTERACT_FALLBACK_LAUNCH_ARGS:-}
       ARTIFACT_DIR: /artifacts
