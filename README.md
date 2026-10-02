@@ -145,7 +145,7 @@ the [Firecrawl API reference](https://docs.firecrawl.dev/api-reference/introduct
 | `POST /v2/map` | Discover all URLs on a site |
 | `POST /v2/search` | Web search via SearXNG — results under `data.web`; `scrapeOptions` scrapes each hit |
 | `POST /v1/extract` | **Shimmed.** LLM extraction via Ollama — expands `*` URLs via `/v2/map`, falls back to `/v2/search` when only `prompt` is given, synchronous result |
-| `POST /v1/research` | **Custom.** Composed answer endpoint — `/v2/search` with per-result markdown scrape, then Ollama synthesizes `{answer, sources, documents}` |
+| `POST /v1/research` | **Custom.** Composed answer endpoint — Ollama decomposes compound questions into focused sub-queries, `/v2/search` runs each (with per-result markdown scrape), results are round-robin merged, then Ollama synthesizes `{answer, queries, rounds, sources, documents}`; facets the documents couldn't answer are reported as `gaps`, triggering one more retrieval round targeted at them |
 | `POST /v1/interact` | **Custom.** Playwright-driven interaction (below) |
 | `POST /v1/interact/async` | Same body, returns a job `id` immediately |
 | `GET /v1/interact/jobs/:id` | Poll an async interact job — live `events`, `actionsLog`, `transcript`, `answer`, `data` |
@@ -355,6 +355,25 @@ Practical guidance:
 - `NUM_WORKERS_PER_QUEUE`, `CRAWL_CONCURRENT_REQUESTS`,
   `MAX_CONCURRENT_JOBS`, `BROWSER_POOL_SIZE`, `BLOCK_MEDIA`,
   `HARNESS_STARTUP_TIMEOUT_MS`, `LOGGING_LEVEL` — upstream tuning.
+
+## Testing
+
+`scripts/test-api.mjs` exercises every endpoint at full complexity and prints a
+PASS/FAIL report (exit code 1 on failure):
+
+```bash
+node scripts/test-api.mjs                  # full suite (~2-3 min; LLM tests included)
+node scripts/test-api.mjs --fast           # skip Ollama-heavy tests (~30s)
+node scripts/test-api.mjs --only research  # run tests matching a substring
+node scripts/test-api.mjs --report out.json  # also write a JSON report
+```
+
+Covers: health/status, v1+v2 scrape (incl. `json` extraction format), search,
+map, batch-scrape and crawl job lifecycles (with cancel fallback), `/v1/extract`,
+`/v1/research` (asserts query decomposition + gap-driven second round), interact
+actions/async-jobs/session lifecycle + artifacts, prompt-mode agent, negative
+cases, and the MCP interface (`tools/list` + a real `tools/call` through the
+gateway). Env overrides: `GATEWAY`, `MCP`, `GATEWAY_API_KEY`.
 
 ## Notes & limits
 

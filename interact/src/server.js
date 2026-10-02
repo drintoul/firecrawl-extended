@@ -403,6 +403,19 @@ async function runInteract(body, live) {
           transcript.push("(the last action keeps failing — try a different approach: goto a URL from the snapshot, scroll, or finish with done)");
         }
       }
+      // Steps exhausted without done — give the model one forced chance to
+      // answer from everything it saw rather than returning answer:null.
+      if (!answer && transcript.length && remaining() > 30000) {
+        transcript.push("(OUT OF STEPS — do not plan more actions. Reply {\"done\":true,\"answer\":\"...\"} with your best answer from what you saw, honestly saying if you could not verify it)");
+        try {
+          const summary = await withTimeout(summarizePage(session.page), Math.min(15000, remaining()));
+          const fin = await withTimeout(agentStep(prompt, transcript, summary, body.model), Math.min(180000, remaining()));
+          if (fin.done && fin.answer) {
+            answer = fin.answer;
+            session.events.push({ at: Date.now(), kind: "agent", text: `done (forced): ${answer.slice(0, 300)}` });
+          }
+        } catch { /* forced answer best-effort */ }
+      }
       if (formats.length) {
         try {
           const cap = await withTimeout(

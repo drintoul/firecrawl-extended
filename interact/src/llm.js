@@ -78,6 +78,7 @@ A <target> is a REAL locator for THIS page — from the snapshot's interactive e
 
 Rules:
 - Look at "Visible text" in the snapshot FIRST — the answer may already be there.
+- For "which X does Y" / "find the X that Z" questions, go to the listing, category, destination, or search page that groups by Z — do NOT iterate individual item/detail pages hoping each mentions Z. Detail pages rarely say where an item is used.
 - To reach content, prefer goto with an href from the interactive-elements list over clicking ambiguous nav text; copy hrefs exactly.
 - Never invent selectors — every target must come from the snapshot or be a URL/text you saw.
 - Never use waitForLoadState with "networkidle" — ad requests prevent it.

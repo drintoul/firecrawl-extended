@@ -483,6 +483,12 @@ function buildRendered(json) {
         + "\n\n" + d.markdown
       ).join("\n\n---\n\n")
     : null;
+  // Agent answers deserve top billing — the scraped markdown is just the
+  // page the agent happened to end on, not the response to the prompt.
+  if (typeof json?.answer === "string" && json.answer.trim()) {
+    const head = `## Agent answer\n\n${json.answer.trim()}`;
+    md = md ? `${head}\n\n---\n\n*Final page capture:*\n\n${md}` : head;
+  }
   lastMarkdown = md;
   lastImages = [];
   if (md) {
