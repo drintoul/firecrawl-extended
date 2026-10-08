@@ -8,13 +8,16 @@ name: firecrawl-extended
 #   - api                 upstream Firecrawl API + workers (NuQ/PG queue)
 #   - playwright-service  JS-rendering microservice; also shared on
 #                         llm-network and host port PLAYWRIGHT_HOST_PORT
-#                         (default 13000) for non-docker consumers
+#                         for non-docker consumers
 #   - redis / rabbitmq / nuq-postgres   queue + rate-limit infra
 #
 # External dependencies (already running on this host, attached via the
 # pre-existing `llm-network` docker network):
 #   - `ollama`  container  -> powers /v1/extract + interact prompt planning
 #   - `searxng` container  -> powers /v1/search
+#
+# All ${VARS} come from .env — copy .env.example first; this file has no
+# fallback defaults.
 #
 # On a fresh host, create them with:
 #   docker network create llm-network
@@ -47,27 +50,27 @@ x-firecrawl-env: &firecrawl-env
   REDIS_URL: redis://redis:6379
   REDIS_RATE_LIMIT_URL: redis://redis:6379
   PLAYWRIGHT_MICROSERVICE_URL: http://playwright-service:3000/scrape
-  POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  POSTGRES_USER: ${POSTGRES_USER}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-  POSTGRES_DB: ${POSTGRES_DB:-postgres}
+  POSTGRES_DB: ${POSTGRES_DB}
   POSTGRES_HOST: nuq-postgres
   POSTGRES_PORT: "5432"
   USE_DB_AUTHENTICATION: "false"
-  NUM_WORKERS_PER_QUEUE: ${NUM_WORKERS_PER_QUEUE:-8}
-  CRAWL_CONCURRENT_REQUESTS: ${CRAWL_CONCURRENT_REQUESTS:-10}
-  MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-5}
-  BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-5}
+  NUM_WORKERS_PER_QUEUE: ${NUM_WORKERS_PER_QUEUE}
+  CRAWL_CONCURRENT_REQUESTS: ${CRAWL_CONCURRENT_REQUESTS}
+  MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS}
+  BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE}
   # LLM wiring -> Ollama (OpenAI-compatible endpoint)
-  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://ollama:11434/v1}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL}
   OPENAI_API_KEY: ollama
-  MODEL_NAME: ${OLLAMA_MODEL:-llama3.1:8b}
-  MODEL_EMBEDDING_NAME: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+  MODEL_NAME: ${OLLAMA_MODEL}
+  MODEL_EMBEDDING_NAME: ${OLLAMA_EMBEDDING_MODEL}
   # Search wiring -> SearXNG (JSON output must be enabled)
-  SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT:-http://searxng:8080}
-  SEARXNG_ENGINES: ${SEARXNG_ENGINES:-}
-  SEARXNG_CATEGORIES: ${SEARXNG_CATEGORIES:-}
-  LOGGING_LEVEL: ${LOGGING_LEVEL:-INFO}
+  SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT}
+  SEARXNG_ENGINES: ${SEARXNG_ENGINES}
+  SEARXNG_CATEGORIES: ${SEARXNG_CATEGORIES}
+  LOGGING_LEVEL: ${LOGGING_LEVEL}
   ENV: local
 
 services:
@@ -89,14 +92,14 @@ services:
       INTERACT_SERVICE_URL: http://interact:3001
       # Internal probes powering the console status pills (GET /status)
       PLAYWRIGHT_SERVICE_URL: http://playwright-service:3000
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-180000}
-      SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT:-http://searxng:8080}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS}
+      SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT}
       # If set, all gateway calls require `Authorization: Bearer <key>`
-      GATEWAY_API_KEY: ${GATEWAY_API_KEY:-}
+      GATEWAY_API_KEY: ${GATEWAY_API_KEY}
     ports:
-      - "${GATEWAY_PORT:-18080}:8080"
+      - "${GATEWAY_PORT}:8080"
     depends_on:
       api:
         condition: service_started
@@ -113,9 +116,9 @@ services:
     environment:
       PORT: "8081"
       GATEWAY_URL: http://gateway:8080
-      GATEWAY_API_KEY: ${GATEWAY_API_KEY:-}
+      GATEWAY_API_KEY: ${GATEWAY_API_KEY}
     ports:
-      - "${MCP_PORT:-18081}:8081"
+      - "${MCP_PORT}:8081"
     depends_on:
       gateway:
         condition: service_started
@@ -132,20 +135,20 @@ services:
       - llm-network
     environment:
       PORT: "3001"
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
-      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-180000}
-      SESSION_TTL_MS: ${INTERACT_SESSION_TTL_MS:-600000}
-      MAX_SESSIONS: ${INTERACT_MAX_SESSIONS:-10}
-      JOB_TTL_MS: ${INTERACT_JOB_TTL_MS:-600000}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE}
+      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS}
+      SESSION_TTL_MS: ${INTERACT_SESSION_TTL_MS}
+      MAX_SESSIONS: ${INTERACT_MAX_SESSIONS}
+      JOB_TTL_MS: ${INTERACT_JOB_TTL_MS}
       # Vision model describing page screenshots during prompt-mode agent
       # steps (empty disables; per-request "vision" overrides)
-      INTERACT_VISION_MODEL: ${INTERACT_VISION_MODEL:-}
+      INTERACT_VISION_MODEL: ${INTERACT_VISION_MODEL}
       # Set to 1 to abort tracker/ad requests in every interact session
-      INTERACT_ADBLOCK: ${INTERACT_ADBLOCK:-}
+      INTERACT_ADBLOCK: ${INTERACT_ADBLOCK}
       # Comma-separated browser launch args retried when a goto fails.
-      INTERACT_FALLBACK_LAUNCH_ARGS: ${INTERACT_FALLBACK_LAUNCH_ARGS:-}
+      INTERACT_FALLBACK_LAUNCH_ARGS: ${INTERACT_FALLBACK_LAUNCH_ARGS}
       ARTIFACT_DIR: /artifacts
     volumes:
       # Session artifacts (traces, HARs, videos, downloads) on the host.
@@ -174,7 +177,7 @@ services:
       EXTRACT_WORKER_PORT: "3004"
       WORKER_PORT: "3005"
       NUQ_RABBITMQ_URL: amqp://rabbitmq:5672
-      HARNESS_STARTUP_TIMEOUT_MS: ${HARNESS_STARTUP_TIMEOUT_MS:-120000}
+      HARNESS_STARTUP_TIMEOUT_MS: ${HARNESS_STARTUP_TIMEOUT_MS}
     command: node dist/src/harness.js --start-docker
     # Intentionally NOT published: reachable only through the gateway.
     expose:
@@ -205,14 +208,14 @@ services:
       - llm-network
     environment:
       PORT: "3000"
-      BLOCK_MEDIA: ${BLOCK_MEDIA:-}
-      MAX_CONCURRENT_PAGES: ${MAX_CONCURRENT_PAGES:-10}
-      PROXY_SERVER: ${PROXY_SERVER:-}
-      PROXY_USERNAME: ${PROXY_USERNAME:-}
-      PROXY_PASSWORD: ${PROXY_PASSWORD:-}
-      ALLOW_LOCAL_WEBHOOKS: ${ALLOW_LOCAL_WEBHOOKS:-}
+      BLOCK_MEDIA: ${BLOCK_MEDIA}
+      MAX_CONCURRENT_PAGES: ${MAX_CONCURRENT_PAGES}
+      PROXY_SERVER: ${PROXY_SERVER}
+      PROXY_USERNAME: ${PROXY_USERNAME}
+      PROXY_PASSWORD: ${PROXY_PASSWORD}
+      ALLOW_LOCAL_WEBHOOKS: ${ALLOW_LOCAL_WEBHOOKS}
     ports:
-      - "${PLAYWRIGHT_HOST_PORT:-13000}:3000"
+      - "${PLAYWRIGHT_HOST_PORT}:3000"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -251,16 +254,16 @@ services:
     container_name: firecrawl-extended-nuq-postgres
     image: ghcr.io/firecrawl/nuq-postgres:latest
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}",
         ]
       interval: 5s
       timeout: 5s
@@ -277,4 +280,3 @@ networks:
   # publishing the internal api port.
   app-network:
     external: true
-

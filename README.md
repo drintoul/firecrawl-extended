@@ -8,6 +8,7 @@ service, and Ollama-backed LLM extraction.
  external:
    browser / curl ─▶ :18080  gateway   single REST interface + web console
    mcp clients    ─▶ :18081  mcp       Streamable HTTP; calls gateway internally
+   other stacks   ─▶ :13000  playwright-service   shared JS-rendering endpoint
 
  gateway routes:
    /v0, /v1, /v2  (any path)   ─▶ api        upstream Firecrawl API + workers
@@ -16,7 +17,8 @@ service, and Ollama-backed LLM extraction.
    /  /api  /status  /healthz  ─▶ gateway itself
 
  internal:    api ─▶ playwright-service · redis · rabbitmq · nuq-postgres
- llm-network: api, interact, gateway ─▶ ollama :11434 · searxng :8080
+ llm-network: api, interact, gateway, playwright-service ─▶ ollama :11434 · searxng :8080
+ app-network: gateway ─▶ other docker stacks (firecrawl-extended-gateway:8080)
 ```
 
 ## Why I built this
@@ -42,11 +44,11 @@ leaves a few gaps:
 
 | Container | Image / build | Role |
 |---|---|---|
-| `firecrawl-extended-gateway` | `./gateway` | **The one external REST interface** (`:18080`). Serves the web console at `/`, proxies every upstream endpoint (`/v0`–`/v2`), adds `/v1/interact` + a working `/v1/extract`. Optional bearer auth. |
+| `firecrawl-extended-gateway` | `./gateway` | **The one external REST interface** (`:18080`). Serves the web console at `/`, proxies every upstream endpoint (`/v0`–`/v2`), adds `/v1/interact` + a working `/v1/extract`. Optional bearer auth. Also reachable by other docker stacks on `app-network` as `firecrawl-extended-gateway:8080`. |
 | `firecrawl-extended-mcp` | `./mcp` | **The MCP interface** (`:18081/mcp`, Streamable HTTP). All Firecrawl capabilities as tools; forwards `GATEWAY_API_KEY`. |
 | `firecrawl-extended-interact` | `./interact` | Custom Playwright service backing `POST /v1/interact`: stateful sessions, full action surface, Ollama prompt→action planner. Internal only. |
 | `firecrawl-extended-api` | `ghcr.io/firecrawl/firecrawl` | Upstream API + embedded workers. Not published — reachable only via the gateway. |
-| `firecrawl-extended-playwright-service` | `ghcr.io/firecrawl/playwright-service` | Upstream JS-rendering microservice used by `api`. |
+| `playwright-service` | `ghcr.io/firecrawl/playwright-service` | Upstream JS-rendering microservice used by `api`. Shared: also on `llm-network` and published on the host at `:13000` for non-docker consumers. |
 | `firecrawl-extended-redis` | `redis:alpine` | Rate limits / queue state (AOF on, `./data/redis`). |
 | `firecrawl-extended-rabbitmq` | `rabbitmq:3-management` | Job queue (`./data/rabbitmq`). |
 | `firecrawl-extended-nuq-postgres` | `ghcr.io/firecrawl/nuq-postgres` | NuQ job store (`./data/postgres`). |
@@ -297,7 +299,8 @@ Tools: `firecrawl_scrape`, `firecrawl_batch_scrape`,
 keep them in sync. Notables:
 
 - `POSTGRES_PASSWORD` — required.
-- `GATEWAY_PORT` / `MCP_PORT` — published ports (18080 / 18081).
+- `GATEWAY_PORT` / `MCP_PORT` / `PLAYWRIGHT_HOST_PORT` — published ports
+  (18080 / 18081 / 13000).
 - `GATEWAY_API_KEY` — set to require `Authorization: Bearer <key>` on the
   REST interface (and the web console); the MCP server forwards it
   automatically.
@@ -355,6 +358,8 @@ Practical guidance:
 - `NUM_WORKERS_PER_QUEUE`, `CRAWL_CONCURRENT_REQUESTS`,
   `MAX_CONCURRENT_JOBS`, `BROWSER_POOL_SIZE`, `BLOCK_MEDIA`,
   `HARNESS_STARTUP_TIMEOUT_MS`, `LOGGING_LEVEL` — upstream tuning.
+- `MAX_CONCURRENT_PAGES`, `PROXY_SERVER`, `PROXY_USERNAME`,
+  `PROXY_PASSWORD`, `ALLOW_LOCAL_WEBHOOKS` — playwright-service tuning.
 
 ## Testing
 
