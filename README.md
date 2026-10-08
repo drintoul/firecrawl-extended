@@ -8,7 +8,7 @@ service, and Ollama-backed LLM extraction.
  external:
    browser / curl ─▶ :18080  gateway   single REST interface + web console
    mcp clients    ─▶ :18081  mcp       Streamable HTTP; calls gateway internally
-   other stacks   ─▶ :13000  playwright-service   shared JS-rendering endpoint
+   localhost      ─▶ :13000  playwright-service   shared JS-rendering (localhost-bound)
 
  gateway routes:
    /v0, /v1, /v2  (any path)   ─▶ api        upstream Firecrawl API + workers
@@ -301,9 +301,10 @@ keep them in sync. Notables:
 - `POSTGRES_PASSWORD` — required.
 - `GATEWAY_PORT` / `MCP_PORT` / `PLAYWRIGHT_HOST_PORT` — published ports
   (18080 / 18081 / 13000).
-- `GATEWAY_API_KEY` — set to require `Authorization: Bearer <key>` on the
-  REST interface (and the web console); the MCP server forwards it
-  automatically.
+- `GATEWAY_API_KEY` — bearer key required on **both** external interfaces
+  (REST gateway + MCP; the web console prompts for it). The gateway and MCP
+  server refuse to start when it's unset — set `ALLOW_UNAUTHENTICATED=true`
+  to explicitly opt out for trusted-local deployments.
 - `OLLAMA_BASE_URL` / `OLLAMA_MODEL` / `OLLAMA_EMBEDDING_MODEL` —
   extraction/planning backend (default `llama3.1:8b`, already pulled in the
   shared Ollama). Larger models extract and plan better — interact `prompt`
@@ -360,6 +361,12 @@ Practical guidance:
   `HARNESS_STARTUP_TIMEOUT_MS`, `LOGGING_LEVEL` — upstream tuning.
 - `MAX_CONCURRENT_PAGES`, `PROXY_SERVER`, `PROXY_USERNAME`,
   `PROXY_PASSWORD`, `ALLOW_LOCAL_WEBHOOKS` — playwright-service tuning.
+  `PLAYWRIGHT_BIND` controls the host bind address (`127.0.0.1` default;
+  the endpoint is unauthenticated — only widen if LAN consumers need it).
+- `INTERACT_ALLOW_PRIVATE` — set `1` to let `interact` browse URLs that
+  resolve to private/internal addresses (docker service names,
+  `host.docker.internal`, link-local/cloud metadata). Default blocks them
+  (SSRF guard; initial target only — redirect chains are not re-checked).
 
 ## Testing
 
@@ -379,6 +386,21 @@ map, batch-scrape and crawl job lifecycles (with cancel fallback), `/v1/extract`
 actions/async-jobs/session lifecycle + artifacts, prompt-mode agent, negative
 cases, and the MCP interface (`tools/list` + a real `tools/call` through the
 gateway). Env overrides: `GATEWAY`, `MCP`, `GATEWAY_API_KEY`.
+
+The same coverage also exists as a pytest suite under `tests/` (used by CI):
+
+```bash
+pip install -r tests/requirements.txt
+pytest                    # everything
+pytest -m "not llm"       # skip Ollama-backed tests (extract, research,
+                          # v2 json format, interact prompt mode)
+pytest -m "not slow"      # also skip job-polling tests
+```
+
+`.github/workflows/api-tests.yml` runs it end-to-end: creates `llm-network`
++ `app-network`, starts Ollama/SearXNG, builds the compose stack, then runs
+pytest — `-m "not llm"` on PRs/pushes, the full suite (with a small pulled
+model) on the nightly schedule and manual dispatch.
 
 ## Notes & limits
 

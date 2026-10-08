@@ -1,0 +1,101 @@
+name: API tests
+
+# Full stack e2e: builds the compose stack plus its external deps (ollama,
+# searxng on llm-network; app-network for consumers) and runs the pytest
+# suite in tests/. PRs and pushes run everything except the Ollama-heavy
+# `llm` tests; nightly + manual runs pull a small model and run all tests.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: api-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FULL_SUITE: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+  # Small model kept in CI so LLM tests stay fast on CPU runners.
+  CI_OLLAMA_MODEL: qwen2.5:1.5b
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create external docker networks
+        run: |
+          docker network create llm-network
+          docker network create app-network
+
+      - name: Start Ollama + SearXNG (external deps)
+        run: |
+          docker run -d --name ollama --network llm-network \
+            -e OLLAMA_KEEP_ALIVE=-1 ollama/ollama
+          docker run -d --name searxng --network llm-network \
+            -v "$PWD/searxng:/etc/searxng" searxng/searxng
+          for i in $(seq 1 60); do
+            docker exec ollama ollama list >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo "ollama did not come up"; exit 1
+
+      - name: Configure .env
+        run: |
+          cp .env.example .env
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-test-password/' .env
+          # CI exercises the real auth path — anonymous requests must 401.
+          sed -i 's/^GATEWAY_API_KEY=.*/GATEWAY_API_KEY=ci-e2e-key/' .env
+          if [ "$FULL_SUITE" = "true" ]; then
+            sed -i "s/^OLLAMA_MODEL=.*/OLLAMA_MODEL=$CI_OLLAMA_MODEL/" .env
+          fi
+
+      - name: Pull small Ollama model (full suite only)
+        if: env.FULL_SUITE == 'true'
+        run: docker exec ollama ollama pull "$CI_OLLAMA_MODEL"
+
+      - name: Start the stack
+        run: docker compose up -d --build
+
+      - name: Wait for the gateway
+        run: |
+          for i in $(seq 1 90); do
+            curl -fsS http://localhost:18080/healthz >/dev/null 2>&1 && exit 0
+            sleep 5
+          done
+          docker compose ps
+          docker compose logs --tail=150
+          exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tests/requirements.txt
+
+      - name: Install test deps
+        run: pip install -r tests/requirements.txt
+
+      - name: Run API tests
+        env:
+          GATEWAY: http://localhost:18080
+          MCP: http://localhost:18081/mcp
+          GATEWAY_API_KEY: ci-e2e-key
+        run: |
+          if [ "$FULL_SUITE" = "true" ]; then
+            pytest
+          else
+            pytest -m "not llm"
+          fi
+
+      - name: Dump compose logs on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail=200

@@ -8,6 +8,9 @@ const PORT = parseInt(process.env.PORT || "8080", 10);
 const FIRECRAWL_API_URL = (process.env.FIRECRAWL_API_URL || "http://api:3002").replace(/\/$/, "");
 const INTERACT_SERVICE_URL = (process.env.INTERACT_SERVICE_URL || "http://interact:3001").replace(/\/$/, "");
 const GATEWAY_API_KEY = process.env.GATEWAY_API_KEY || "";
+// Fail closed: no key + no explicit opt-out means refuse to start, so a
+// misconfigured deployment can't silently expose every endpoint.
+const ALLOW_UNAUTHENTICATED = /^(1|true)$/i.test(process.env.ALLOW_UNAUTHENTICATED || "");
 const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || "http://ollama:11434").replace(/\/$/, "");
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.1:8b";
 const OLLAMA_TIMEOUT_MS = parseInt(process.env.OLLAMA_TIMEOUT_MS || "180000", 10);
@@ -25,8 +28,17 @@ const PROBE_SLOW_MS = 2000;
 const app = express();
 app.disable("x-powered-by");
 
+if (!GATEWAY_API_KEY && !ALLOW_UNAUTHENTICATED) {
+  console.error(
+    "refusing to start: GATEWAY_API_KEY is not set. Set a bearer key in .env, " +
+    "or set ALLOW_UNAUTHENTICATED=true to explicitly run without auth."
+  );
+  process.exit(1);
+}
+
 // ---------------------------------------------------------------------------
-// Optional bearer auth for the single external interface.
+// Bearer auth for the single external interface (skipped only via explicit
+// ALLOW_UNAUTHENTICATED opt-out; /healthz stays open for liveness probes).
 // ---------------------------------------------------------------------------
 app.use((req, res, next) => {
   if (!GATEWAY_API_KEY || req.path === "/healthz") return next();

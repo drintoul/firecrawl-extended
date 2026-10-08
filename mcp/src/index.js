@@ -6,6 +6,16 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 const PORT = parseInt(process.env.PORT || "8081", 10);
 const GATEWAY_URL = (process.env.GATEWAY_URL || "http://gateway:8080").replace(/\/$/, "");
 const GATEWAY_API_KEY = process.env.GATEWAY_API_KEY || "";
+// Fail closed: no key + no explicit opt-out means refuse to start — the MCP
+// endpoint must never be anonymous by accident.
+const ALLOW_UNAUTHENTICATED = /^(1|true)$/i.test(process.env.ALLOW_UNAUTHENTICATED || "");
+if (!GATEWAY_API_KEY && !ALLOW_UNAUTHENTICATED) {
+  console.error(
+    "refusing to start: GATEWAY_API_KEY is not set. Set a bearer key in .env, " +
+    "or set ALLOW_UNAUTHENTICATED=true to explicitly run without auth."
+  );
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 // Thin REST client over the gateway (the system's single REST interface)
@@ -309,6 +319,14 @@ const app = express();
 app.use(express.json({ limit: "10mb" }));
 
 app.get("/healthz", (_req, res) => res.json({ status: "ok" }));
+
+// Inbound bearer auth — the same GATEWAY_API_KEY this server forwards to the
+// gateway. Anonymous access is only possible under the explicit opt-out.
+app.use("/mcp", (req, res, next) => {
+  if (!GATEWAY_API_KEY) return next();
+  if ((req.headers.authorization || "") === `Bearer ${GATEWAY_API_KEY}`) return next();
+  res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "Unauthorized" }, id: null });
+});
 
 app.all("/mcp", async (req, res) => {
   const server = buildServer();

@@ -1,3 +1,5 @@
+import dns from "node:dns";
+import net from "node:net";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { capture, artifactBase64 } from "./capture.js";
@@ -89,7 +91,7 @@ async function exec(session, action, entry, formats) {
   switch (action.type) {
     // ------------------------------------------------------------- navigation
     case "goto": {
-      assertHttpUrl(action.url);
+      await assertReachableUrl(action.url);
       await page.goto(action.url, {
         waitUntil: action.waitUntil || "domcontentloaded",
         timeout: action.timeout ?? DEFAULT_WAIT_TIMEOUT,
@@ -342,7 +344,7 @@ async function exec(session, action, entry, formats) {
       registerPage(session, p);
       session.page = p;
       if (action.url) {
-        assertHttpUrl(action.url);
+        await assertReachableUrl(action.url);
         await p.goto(action.url, { waitUntil: action.waitUntil || "domcontentloaded", timeout: action.timeout ?? DEFAULT_WAIT_TIMEOUT });
         await settle(p);
       }
@@ -678,6 +680,7 @@ async function addRoute(session, action) {
 }
 
 async function apiRequest(session, action) {
+  await assertReachableUrl(action.url);
   const res = await session.context.request.fetch(action.url, {
     method: action.method ?? "GET",
     headers: action.headers,
@@ -1009,4 +1012,51 @@ export function assertHttpUrl(url) {
     throw new Error(`Only http(s) URLs are allowed, got "${u.protocol}"`);
   }
   return u.toString();
+}
+
+// ---------------------------------------------------------------------------
+// SSRF guard: block targets that resolve to private/internal addresses.
+// Enabled by default (mirrors upstream playwright-service); set
+// INTERACT_ALLOW_PRIVATE=1 to allow internal targets. Note this only checks
+// the requested URL — a public URL that 302-redirects inward is not caught.
+// ---------------------------------------------------------------------------
+const ALLOW_PRIVATE_TARGETS = /^(1|true)$/i.test(process.env.INTERACT_ALLOW_PRIVATE || "");
+
+function isPrivateIp(ip) {
+  if (net.isIPv6(ip)) {
+    const v6 = ip.toLowerCase();
+    if (v6 === "::1" || v6 === "::") return true;
+    if (v6.startsWith("fe80") || /^f[cd]/.test(v6)) return true; // link-local / ULA
+    const m = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/); // IPv4-mapped
+    return m ? isPrivateIp(m[1]) : false;
+  }
+  const p = ip.split(".").map(Number);
+  return (
+    p[0] === 0 || p[0] === 10 || p[0] === 127 ||                    // this-net, private, loopback
+    (p[0] === 100 && p[1] >= 64 && p[1] <= 127) ||                  // CGNAT
+    (p[0] === 169 && p[1] === 254) ||                               // link-local / cloud metadata
+    (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||                   // private (docker nets incl.)
+    (p[0] === 192 && p[1] === 168) ||                               // private
+    (p[0] === 192 && p[1] === 0 && (p[2] === 0 || p[2] === 2)) ||   // IETF proto / TEST-NET-1
+    (p[0] === 198 && (p[1] === 18 || p[1] === 19)) ||               // benchmark
+    (p[0] === 198 && p[1] === 51 && p[2] === 100) ||                // TEST-NET-2
+    (p[0] === 203 && p[1] === 0 && p[2] === 113) ||                 // TEST-NET-3
+    p[0] >= 224                                                     // multicast + reserved
+  );
+}
+
+export async function assertReachableUrl(url) {
+  const clean = assertHttpUrl(url);
+  if (ALLOW_PRIVATE_TARGETS) return clean;
+  const host = new URL(clean).hostname.replace(/^\[|\]$/g, ""); // strip [v6] brackets
+  const ips = net.isIP(host)
+    ? [{ address: host }]
+    : await dns.promises.lookup(host, { all: true }).catch(() => []);
+  // Unresolvable hosts pass through — the browser surfaces the DNS error.
+  for (const { address } of ips) {
+    if (isPrivateIp(address)) {
+      throw new Error(`Blocked insecure target URL "${url}": resolves to a private/internal address`);
+    }
+  }
+  return clean;
 }

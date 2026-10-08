@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, firefox, webkit, devices } from "playwright";
-import { runActions, assertHttpUrl, registerPage } from "./actions.js";
+import { runActions, assertHttpUrl, assertReachableUrl, registerPage } from "./actions.js";
 import { capture, artifactBase64 } from "./capture.js";
 import { agentStep, summarizePage, describeVisual } from "./llm.js";
 
@@ -163,7 +163,7 @@ async function createSession(opts = {}) {
   sessions.set(id, session);
 
   if (opts.url) {
-    assertHttpUrl(opts.url);
+    await assertReachableUrl(opts.url);
     const nav = { waitUntil: opts.waitUntil || "domcontentloaded", timeout: opts.timeout ?? 30000 };
     try {
       await session.page.goto(opts.url, nav);

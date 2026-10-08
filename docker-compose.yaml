@@ -96,8 +96,11 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL}
       OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS}
       SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT}
-      # If set, all gateway calls require `Authorization: Bearer <key>`
+      # All gateway calls require `Authorization: Bearer <key>` unless
+      # ALLOW_UNAUTHENTICATED=true explicitly opts out (refuses to boot
+      # without one or the other).
       GATEWAY_API_KEY: ${GATEWAY_API_KEY}
+      ALLOW_UNAUTHENTICATED: ${ALLOW_UNAUTHENTICATED}
     ports:
       - "${GATEWAY_PORT}:8080"
     depends_on:
@@ -117,6 +120,7 @@ services:
       PORT: "8081"
       GATEWAY_URL: http://gateway:8080
       GATEWAY_API_KEY: ${GATEWAY_API_KEY}
+      ALLOW_UNAUTHENTICATED: ${ALLOW_UNAUTHENTICATED}
     ports:
       - "${MCP_PORT}:8081"
     depends_on:
@@ -149,6 +153,9 @@ services:
       INTERACT_ADBLOCK: ${INTERACT_ADBLOCK}
       # Comma-separated browser launch args retried when a goto fails.
       INTERACT_FALLBACK_LAUNCH_ARGS: ${INTERACT_FALLBACK_LAUNCH_ARGS}
+      # SSRF guard (default-on): targets resolving to private/internal
+      # addresses are refused; set to 1 to allow internal browsing.
+      INTERACT_ALLOW_PRIVATE: ${INTERACT_ALLOW_PRIVATE}
       ARTIFACT_DIR: /artifacts
     volumes:
       # Session artifacts (traces, HARs, videos, downloads) on the host.
@@ -215,7 +222,9 @@ services:
       PROXY_PASSWORD: ${PROXY_PASSWORD}
       ALLOW_LOCAL_WEBHOOKS: ${ALLOW_LOCAL_WEBHOOKS}
     ports:
-      - "${PLAYWRIGHT_HOST_PORT}:3000"
+      # Localhost-only by default — this endpoint has no auth. Set
+      # PLAYWRIGHT_BIND=0.0.0.0 only if LAN consumers truly need it.
+      - "${PLAYWRIGHT_BIND}:${PLAYWRIGHT_HOST_PORT}:3000"
     security_opt:
       - no-new-privileges:true
     cap_drop:
