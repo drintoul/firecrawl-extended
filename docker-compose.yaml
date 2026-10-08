@@ -6,7 +6,9 @@ name: firecrawl-extended
 #   - mcp                 MCP server, Streamable HTTP (:18081)
 #   - interact            custom Playwright session/interact service
 #   - api                 upstream Firecrawl API + workers (NuQ/PG queue)
-#   - playwright-service  upstream JS-rendering microservice used by the API
+#   - playwright-service  JS-rendering microservice; also shared on
+#                         llm-network and host port PLAYWRIGHT_HOST_PORT
+#                         (default 13000) for non-docker consumers
 #   - redis / rabbitmq / nuq-postgres   queue + rate-limit infra
 #
 # External dependencies (already running on this host, attached via the
@@ -79,6 +81,8 @@ services:
     networks:
       - backend
       - llm-network   # so GET /status can probe ollama + searxng
+      - app-network   # shared network; consumers (rag-backend, isitcanadian-backend)
+                    # reach this gateway as firecrawl-extended-gateway:8080
     environment:
       PORT: "8080"
       FIRECRAWL_API_URL: http://api:3002
@@ -188,18 +192,32 @@ services:
     mem_limit: 8G
     memswap_limit: 8G
 
+  # -------------------------------------------------------------------------
+  # JS-rendering microservice. Also shared: reachable on llm-network and
+  # published on the host at PLAYWRIGHT_HOST_PORT for non-docker consumers.
+  # -------------------------------------------------------------------------
   playwright-service:
     <<: *firecrawl-service
-    container_name: firecrawl-extended-playwright-service
+    container_name: playwright-service
     image: ghcr.io/firecrawl/playwright-service:latest
+    networks:
+      - backend
+      - llm-network
     environment:
       PORT: "3000"
       BLOCK_MEDIA: ${BLOCK_MEDIA:-}
-      MAX_CONCURRENT_PAGES: ${CRAWL_CONCURRENT_REQUESTS:-10}
+      MAX_CONCURRENT_PAGES: ${MAX_CONCURRENT_PAGES:-10}
+      PROXY_SERVER: ${PROXY_SERVER:-}
+      PROXY_USERNAME: ${PROXY_USERNAME:-}
+      PROXY_PASSWORD: ${PROXY_PASSWORD:-}
+      ALLOW_LOCAL_WEBHOOKS: ${ALLOW_LOCAL_WEBHOOKS:-}
+    ports:
+      - "${PLAYWRIGHT_HOST_PORT:-13000}:3000"
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    shm_size: "1gb"
     cpus: 2.0
     mem_limit: 4G
     memswap_limit: 4G
@@ -255,3 +273,8 @@ networks:
   # Pre-existing network hosting the `ollama` and `searxng` containers.
   llm-network:
     external: true
+  # Shared consumer network — lets other stacks reach the gateway without
+  # publishing the internal api port.
+  app-network:
+    external: true
+
