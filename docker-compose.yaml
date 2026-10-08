@@ -169,7 +169,8 @@ services:
   api:
     <<: *firecrawl-service
     container_name: firecrawl-extended-api
-    image: ghcr.io/firecrawl/firecrawl:latest
+    # Pinned digest (was :latest) — upstream drift has broken CI before.
+    image: ghcr.io/firecrawl/firecrawl@sha256:ffec7db3599eb9594327e3abcf3212c57aa98c48392dd2ed67f9cd786f19fc8d
     networks:
       - backend
       - llm-network
@@ -209,7 +210,8 @@ services:
   playwright-service:
     <<: *firecrawl-service
     container_name: playwright-service
-    image: ghcr.io/firecrawl/playwright-service:latest
+    # Pinned digest (was :latest).
+    image: ghcr.io/firecrawl/playwright-service@sha256:645387a4e7ba418ba5125e98185ef5ce3e597d537465048f5345eb604102d68f
     networks:
       - backend
       - llm-network
@@ -261,7 +263,8 @@ services:
   nuq-postgres:
     <<: *firecrawl-service
     container_name: firecrawl-extended-nuq-postgres
-    image: ghcr.io/firecrawl/nuq-postgres:latest
+    # Pinned digest (was :latest).
+    image: ghcr.io/firecrawl/nuq-postgres@sha256:9b638af78d99873bc0ba2b57c9cbcd01df6ce96efeaa72d36cfbe0f76521e8fc
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}

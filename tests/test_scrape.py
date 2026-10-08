@@ -51,10 +51,19 @@ def test_v2_scrape_json_format(api):
 
 
 def test_v2_search(api):
-    r, j = req(api, "POST", "/v2/search", {"query": "firecrawl web scraping", "limit": 3})
-    assert r.status_code == 200 and j["success"], f"HTTP {r.status_code}: {j}"
-    web = j["data"].get("web", [])
-    assert web and web[0].get("url"), "no web results"
+    """External engines can be slow or rate-limited — allow one retry."""
+    last = {}
+    for _ in range(2):
+        r, j = req(api, "POST", "/v2/search", {"query": "firecrawl web scraping", "limit": 3}, timeout=60)
+        last = j
+        if r.status_code == 200 and j.get("success") and j["data"].get("web"):
+            break
+        import time
+
+        time.sleep(10)
+    assert r.status_code == 200 and last.get("success"), f"HTTP {r.status_code}: {last}"
+    web = last["data"].get("web", [])
+    assert web and web[0].get("url"), f"no web results: {last}"
 
 
 def test_v2_map(api):

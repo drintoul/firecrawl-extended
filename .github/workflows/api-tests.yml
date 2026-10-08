@@ -39,7 +39,8 @@ jobs:
           docker run -d --name ollama --network llm-network \
             -e OLLAMA_KEEP_ALIVE=-1 ollama/ollama
           docker run -d --name searxng --network llm-network \
-            -v "$PWD/searxng:/etc/searxng" searxng/searxng
+            -v "$PWD/searxng:/etc/searxng" \
+            searxng/searxng@sha256:cc026dbee25b864d7f9731957cd5ef36ba2e2d61abd2996d57f1b863483e7409
           for i in $(seq 1 60); do
             docker exec ollama ollama list >/dev/null 2>&1 && exit 0
             sleep 2
@@ -52,6 +53,10 @@ jobs:
           sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-test-password/' .env
           # CI exercises the real auth path — anonymous requests must 401.
           sed -i 's/^GATEWAY_API_KEY=.*/GATEWAY_API_KEY=ci-e2e-key/' .env
+          # Restrict SearXNG to engines enabled-by-default in the image that
+          # tolerate datacenter IPs — Google/DDG/startpage often refuse
+          # GitHub runners and empty out /v2/search.
+          sed -i 's/^SEARXNG_ENGINES=.*/SEARXNG_ENGINES=mojeek,brave,bing/' .env
           if [ "$FULL_SUITE" = "true" ]; then
             sed -i "s/^OLLAMA_MODEL=.*/OLLAMA_MODEL=$CI_OLLAMA_MODEL/" .env
           fi
