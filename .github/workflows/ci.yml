@@ -93,10 +93,17 @@ jobs:
           MCP: http://localhost:18081/mcp
           GATEWAY_API_KEY: ci-e2e-key
         run: |
-          if [ "$FULL_SUITE" = "true" ]; then
-            pytest
+          PYTEST_FLAGS=""
+          [ "$FULL_SUITE" = "true" ] || PYTEST_FLAGS='-m "not llm"'
+          # Surface the failure right on the run Summary page (logs need repo
+          # access to download; the summary is what everyone sees).
+          if eval "pytest $PYTEST_FLAGS --tb=short | tee /tmp/pytest.log"; then
+            echo ":white_check_mark: API tests passed" >> "$GITHUB_STEP_SUMMARY"
           else
-            pytest -m "not llm"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -E "FAILED|FAILURES|Error|assert" /tmp/pytest.log | tail -40 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
 
       - name: Dump compose logs on failure

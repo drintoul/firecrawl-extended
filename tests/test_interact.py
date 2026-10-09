@@ -6,13 +6,15 @@ from helpers import poll, req
 
 
 def test_interact_actions(api):
+    # books.toscrape.com: scraping sandbox, no bot protection (HN rate-limits
+    # datacenter IPs). Click "next" pagination -> assert URL -> scrape.
     r, j = req(api, "POST", "/v1/interact", {
-        "url": "https://news.ycombinator.com",
+        "url": "https://books.toscrape.com",
         "actions": [
-            {"type": "click", "target": {"getBy": "role", "role": "link", "name": "new", "exact": True},
+            {"type": "click", "target": {"getBy": "role", "role": "link", "name": "next", "exact": True},
              "waitForLoadState": "domcontentloaded"},
-            {"type": "assert", "target": {"selector": "title"},
-             "assertions": [{"type": "toContainText", "value": "Hacker News"}]},
+            {"type": "assert",
+             "assertions": [{"type": "toHaveURL", "value": "page-2"}]},
             {"type": "scrape"},
         ],
         "formats": ["markdown", "links", "ariaSnapshot"],

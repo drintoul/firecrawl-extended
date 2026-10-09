@@ -61,7 +61,7 @@ def test_crawl_lifecycle(api):
 @pytest.mark.slow
 def test_crawl_cancel(api):
     r, j = req(api, "POST", "/v2/crawl", {
-        "url": "https://news.ycombinator.com",
+        "url": "https://books.toscrape.com",
         "limit": 25,
         "scrapeOptions": {"formats": ["markdown"]},
     })
