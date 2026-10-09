@@ -44,11 +44,11 @@ leaves a few gaps:
 
 | Container | Image / build | Role |
 |---|---|---|
-| `firecrawl-extended-gateway` | `./gateway` | **The one external REST interface** (`:18080`). Serves the web console at `/`, proxies every upstream endpoint (`/v0`–`/v2`), adds `/v1/interact` + a working `/v1/extract`. Optional bearer auth. Also reachable by other docker stacks on `app-network` as `firecrawl-extended-gateway:8080`. |
-| `firecrawl-extended-mcp` | `./mcp` | **The MCP interface** (`:18081/mcp`, Streamable HTTP). All Firecrawl capabilities as tools; forwards `GATEWAY_API_KEY`. |
+| `firecrawl-extended-gateway` | `./gateway` | **The one external REST interface** (`:18080`). Serves the web console at `/`, proxies every upstream endpoint (`/v0`–`/v2`), adds `/v1/interact` + a working `/v1/extract`. Bearer auth by default (`ALLOW_UNAUTHENTICATED=true` opts out). Also reachable by other docker stacks on `app-network` as `firecrawl-extended-gateway:8080`. |
+| `firecrawl-extended-mcp` | `./mcp` | **The MCP interface** (`:18081/mcp`, Streamable HTTP). All Firecrawl capabilities as tools; requires the same `GATEWAY_API_KEY` bearer inbound and forwards it to the gateway. |
 | `firecrawl-extended-interact` | `./interact` | Custom Playwright service backing `POST /v1/interact`: stateful sessions, full action surface, Ollama prompt→action planner. Internal only. |
 | `firecrawl-extended-api` | `ghcr.io/firecrawl/firecrawl` | Upstream API + embedded workers. Not published — reachable only via the gateway. |
-| `playwright-service` | `ghcr.io/firecrawl/playwright-service` | Upstream JS-rendering microservice used by `api`. Shared: also on `llm-network` and published on the host at `:13000` for non-docker consumers. |
+| `playwright-service` | `ghcr.io/firecrawl/playwright-service` | Upstream JS-rendering microservice used by `api`. Shared: also on `llm-network` and published localhost-only at `127.0.0.1:13000` (`PLAYWRIGHT_BIND`) for non-docker consumers — it has no auth of its own. |
 | `firecrawl-extended-redis` | `redis:alpine` | Rate limits / queue state (AOF on, `./data/redis`). |
 | `firecrawl-extended-rabbitmq` | `rabbitmq:3-management` | Job queue (`./data/rabbitmq`). |
 | `firecrawl-extended-nuq-postgres` | `ghcr.io/firecrawl/nuq-postgres` | NuQ job store (`./data/postgres`). |
@@ -69,6 +69,7 @@ On a fresh host:
 
 ```bash
 docker network create llm-network
+docker network create app-network   # shared consumer network for other stacks
 docker run -d --name ollama --network llm-network -p 11434:11434 \
   -v ollama-data:/root/.ollama ollama/ollama
 docker exec ollama ollama pull llama3.1:8b && docker exec ollama ollama pull nomic-embed-text
@@ -82,15 +83,18 @@ instance (e.g. `http://host.docker.internal:11434`).
 ## Quick start
 
 ```bash
-cp .env.example .env        # set POSTGRES_PASSWORD (and optionally GATEWAY_API_KEY)
+cp .env.example .env        # set POSTGRES_PASSWORD + GATEWAY_API_KEY
+                            # (or ALLOW_UNAUTHENTICATED=true for trusted-local use —
+                            #  gateway and MCP refuse to boot with neither)
 docker compose up -d
 ```
 
-Verify:
+Verify (`/healthz` is open; everything else needs the bearer key when set):
 
 ```bash
 curl -s http://localhost:18080/healthz
 curl -s -X POST http://localhost:18080/v1/scrape \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"url": "https://example.com", "formats": ["markdown"]}'
 ```
@@ -275,12 +279,16 @@ close — and are retrievable via `GET /v1/interact/sessions/:id/artifacts/:name
 
 ## MCP interface
 
-Streamable HTTP at `http://localhost:18081/mcp`. Example client config:
+Streamable HTTP at `http://localhost:18081/mcp`. When `GATEWAY_API_KEY` is
+set, clients must send it as a bearer token. Example client config:
 
 ```json
 {
   "mcpServers": {
-    "firecrawl": { "url": "http://localhost:18081/mcp" }
+    "firecrawl": {
+      "url": "http://localhost:18081/mcp",
+      "headers": { "Authorization": "Bearer <GATEWAY_API_KEY>" }
+    }
   }
 }
 ```
@@ -296,7 +304,8 @@ Tools: `firecrawl_scrape`, `firecrawl_batch_scrape`,
 ## Configuration
 
 `.env` (gitignored) and `.env.example` carry the same commented key set —
-keep them in sync. Notables:
+keep them in sync. `docker-compose.yaml` has **no fallback defaults**: every
+`${VAR}` must exist in `.env` or the variable resolves empty. Notables:
 
 - `POSTGRES_PASSWORD` — required.
 - `GATEWAY_PORT` / `MCP_PORT` / `PLAYWRIGHT_HOST_PORT` — published ports
@@ -397,7 +406,7 @@ pytest -m "not llm"       # skip Ollama-backed tests (extract, research,
 pytest -m "not slow"      # also skip job-polling tests
 ```
 
-`.github/workflows/api-tests.yml` runs it end-to-end: creates `llm-network`
+`.github/workflows/ci.yml` runs it end-to-end: creates `llm-network`
 + `app-network`, starts Ollama/SearXNG, builds the compose stack, then runs
 pytest — `-m "not llm"` on PRs/pushes, the full suite (with a small pulled
 model) on the nightly schedule and manual dispatch.
@@ -419,3 +428,13 @@ model) on the nightly schedule and manual dispatch.
   reaches them solely through `gateway` on `:18080` (plus MCP on `:18081`).
 - `api` is capped at 4 CPU / 8 GB, `playwright-service` at 2 CPU / 4 GB
   (see `docker-compose.yaml`); raise or remove for heavier workloads.
+- The `ghcr.io/firecrawl/*` images are pinned by digest — bump them
+  deliberately, not via `:latest`.
+
+## Security
+
+See [SECURITY.md](SECURITY.md). Reporting: GitHub private vulnerability
+reporting or email. Baseline: set `GATEWAY_API_KEY` (both external interfaces
+refuse to boot without it or an explicit opt-out), keep `playwright-service`
+localhost-bound, and leave the interact SSRF guard on
+(`INTERACT_ALLOW_PRIVATE` unset) unless you browse internal targets.

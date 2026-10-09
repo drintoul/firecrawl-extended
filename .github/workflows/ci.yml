@@ -1,4 +1,4 @@
-name: API tests
+name: CI
 
 # Full stack e2e: builds the compose stack plus its external deps (ollama,
 # searxng on llm-network; app-network for consumers) and runs the pytest
